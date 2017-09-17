@@ -35,8 +35,10 @@
 
 namespace imu_tk
 {
+
 /** @brief Simple container for a data item (e.g., timestamp + x, y, z accelerometers or
  *         gyroscopes reading */
+//! 最基本的采样数据单元(时间戳，xyz数据)
 template <typename _T > class TriadData_
 {
 public:
@@ -180,17 +182,17 @@ struct DataInterval
                                          _T duration )
   {
     if( duration <= 0)
-      throw std::invalid_argument("Invalid interval duration");
+        throw std::invalid_argument("Invalid interval duration");
     if( samples.size() < 3 )
-      throw std::invalid_argument("Invalid data samples vector");
-    
+        throw std::invalid_argument("Invalid data samples vector");
+
     _T end_ts = samples[0].timestamp() + duration;
     int end_idx;
     if ( end_ts >=  samples[samples.size() - 1].timestamp() ) 
-      end_idx = samples.size() - 1;
+        end_idx = samples.size() - 1;
     else
-      end_idx = timeToIndex( samples, end_ts );
-    
+        end_idx = timeToIndex( samples, end_ts );
+
     return DataInterval( 0, end_idx );
   };
  
@@ -222,7 +224,7 @@ struct DataInterval
   int start_idx, end_idx;
   
 private:
-  
+  //! 将时间戳转换为采样Index
   template <typename _T> static int timeToIndex( const std::vector< TriadData_<_T> > &samples, 
                                                  _T ts )
   {
@@ -334,18 +336,25 @@ template <typename _T>
   return os;
 }
 
+/**
+ *  判断采样间隔和采样数据是否能够对应
+ */
 template <typename _T>
   DataInterval checkInterval( const std::vector< TriadData_<_T> > &samples, 
                               const DataInterval &interval )
 {
-  int start_idx = interval.start_idx, end_idx = interval.end_idx;
-  if( start_idx < 0) start_idx = 0;
-  if( end_idx < start_idx || end_idx > samples.size() - 1 ) 
-    end_idx = samples.size() - 1;
-  
-  return DataInterval( start_idx, end_idx );
+    int start_idx = interval.start_idx, end_idx = interval.end_idx;
+    if( start_idx < 0) 
+        start_idx = 0;
+    if( end_idx < start_idx || end_idx > samples.size() - 1 ) 
+        end_idx = samples.size() - 1;
+
+    return DataInterval( start_idx, end_idx );
 }
 
+/**
+ * 计算某个采样片段的平均值
+ */
 template <typename _T>
   Eigen::Matrix< _T, 3, 1> dataMean( const std::vector< TriadData_<_T> >& samples, 
                                      const DataInterval& interval )
@@ -362,6 +371,9 @@ template <typename _T>
   return mean;
 }
 
+/**
+ * 计算index在interval范围之内的测量值方差，作为IMU静态判断条件
+ */
 template <typename _T>
   Eigen::Matrix< _T, 3, 1> dataVariance( const std::vector< TriadData_<_T> >& samples, 
                                          const DataInterval& interval )
@@ -381,55 +393,72 @@ template <typename _T>
   return variance;
 }
 
-template <typename _T>
-  void extractIntervalsSamples ( const std::vector< TriadData_<_T> >& samples, 
+/**
+ * [extractIntervalsSamples  从samples中提取出静态的采样片段]
+ * @param samples             [加速度测量值]
+ * @param intervals           [静态片段的Index]
+ * @param extracted_samples   [提取出的静态片段所有测量值的集合]
+ * @param extracted_intervals [满足要求的静态片段的Index]
+ * @param interval_n_samps    [静态片段包含的测量值数量]
+ * @param only_means          [是否使用均值]
+ */
+template <typename _T> 
+void extractIntervalsSamples ( const std::vector< TriadData_<_T> >& samples, 
                                  const std::vector< DataInterval >& intervals, 
                                  std::vector< TriadData_<_T> >& extracted_samples, 
                                  std::vector< DataInterval > &extracted_intervals,
                                  int interval_n_samps, bool only_means )
 {
-  // Check for valid intervals  (i.e., intervals with at least interval_n_samps samples)
-  int n_valid_intervals = 0, n_static_samples;
-  for( int i = 0; i < intervals.size(); i++)
-  {
-    if( ( intervals[i].end_idx - intervals[i].start_idx + 1 ) >= interval_n_samps )
-      n_valid_intervals++;
-  }
-  
-  if( only_means )
-    n_static_samples = n_valid_intervals;
-  else
-    n_static_samples = n_valid_intervals*interval_n_samps;
-  
-  extracted_samples.clear();
-  extracted_intervals.clear();
-  extracted_samples.reserve(n_static_samples);
-  extracted_intervals.reserve(n_valid_intervals);
-  
-  // For each valid interval, extract the first interval_n_samps samples
-  for( int i = 0; i < intervals.size(); i++)
-  {
-    int interval_size = intervals[i].end_idx - intervals[i].start_idx + 1;
-    if( interval_size >= interval_n_samps )
+    // Check for valid intervals  (i.e., intervals with at least interval_n_samps samples)
+    //! 计算有效的静态片段
+    int n_valid_intervals = 0, n_static_samples;
+    for( int i = 0; i < intervals.size(); i++)
     {
-      extracted_intervals.push_back( intervals[i] );
-      if( only_means )
-      {
-        DataInterval mean_inerval( intervals[i].start_idx, intervals[i].end_idx );
-        // Take the timestamp centered in the interval where the mean is computed
-        _T timestamp = samples[ intervals[i].start_idx + interval_size/2 ].timestamp();
-        Eigen::Matrix< _T, 3, 1> mean_val = dataMean ( samples, mean_inerval );
-        extracted_samples.push_back( TriadData_<_T>(timestamp, mean_val ) );
-      }
-      else
-      {
-        for(int j = intervals[i].start_idx; j < intervals[i].start_idx + interval_n_samps; j++)
-          extracted_samples.push_back( samples[j] );
-      }
+        if( ( intervals[i].end_idx - intervals[i].start_idx + 1 ) >= interval_n_samps )
+            n_valid_intervals++;
     }
-  }
+
+    if( only_means )
+        n_static_samples = n_valid_intervals;
+    else
+        n_static_samples = n_valid_intervals*interval_n_samps;
+
+    extracted_samples.clear();
+    extracted_intervals.clear();
+    extracted_samples.reserve(n_static_samples);
+    extracted_intervals.reserve(n_valid_intervals);
+
+    // For each valid interval, extract the first interval_n_samps samples
+    //! 按照两种方式存入作为下一步优化器输入的测量值 
+    for( int i = 0; i < intervals.size(); i++)
+    {
+        int interval_size = intervals[i].end_idx - intervals[i].start_idx + 1;
+        if( interval_size >= interval_n_samps )
+        {
+            extracted_intervals.push_back( intervals[i] );
+            //! 对整个静态片段求取均值，然后存入到extracted_samples中
+            if( only_means )
+            {
+                //! 求取片段均值
+                DataInterval mean_inerval( intervals[i].start_idx, intervals[i].end_idx );
+                // Take the timestamp centered in the interval where the mean is computed
+                _T timestamp = samples[ intervals[i].start_idx + interval_size/2 ].timestamp();
+                Eigen::Matrix< _T, 3, 1> mean_val = dataMean ( samples, mean_inerval );
+                extracted_samples.push_back( TriadData_<_T>(timestamp, mean_val ) );
+            }
+            //! 不求取均值，则直接将采样值存入即可
+            else
+            {
+                for(int j = intervals[i].start_idx; j < intervals[i].start_idx + interval_n_samps; j++)
+                    extracted_samples.push_back( samples[j] );
+            }
+        }
+    }
 }
 
+/**
+ * 由旋转矩阵得到欧拉角，roll,pitch,yaw
+ */
 template <typename _T> void decomposeRotation( const Eigen::Matrix< _T, 3, 3> &rot_mat,
                                                Eigen::Matrix< _T, 3, 1> &rpy_rot_vec )
 {

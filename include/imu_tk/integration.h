@@ -108,7 +108,9 @@ template <typename _T> void integrateGyroInterval( const std::vector< TriadData_
 }
 
 /* Implementation */
-
+/**
+  * 归一化
+ */
 template <typename _T> inline void imu_tk::normalizeQuaternion ( Eigen::Matrix< _T, 4 , 1  >& quat )
 {
   _T quat_norm = quat.norm();
@@ -121,6 +123,9 @@ template <typename _T> inline void imu_tk::normalizeQuaternion ( _T quat[4] )
   imu_tk::normalizeQuaternion ( tmp_q );
 }
 
+/**
+ * 斜对称矩阵
+ */
 template <typename _T> 
   static inline void computeOmegaSkew( const Eigen::Matrix< _T, 3, 1> &omega, 
                                        Eigen::Matrix< _T, 4, 4> &skew )
@@ -131,6 +136,9 @@ template <typename _T>
             omega(2),   omega(1),  -omega(0),   _T(0);
 }
 
+/**
+ * RK4 数值积分，参考论文公式17~20
+ */
 template <typename _T> 
   inline void imu_tk::quatIntegrationStepRK4( const Eigen::Matrix< _T, 4, 1> &quat, 
                                               const Eigen::Matrix< _T, 3, 1> &omega0, 
@@ -197,6 +205,13 @@ template <typename _T> void imu_tk::integrateGyroInterval( const std::vector< Tr
   }
 }
 
+/**
+ * [imu_tk::integrateGyroInterval 陀螺仪RK4积分]
+ * @param gyro_samples [一系列的采样数据点]
+ * @param rot_res      [最终的旋转矩阵]
+ * @param data_dt      [采样时间间隔]
+ * @param interval     [数据间隔]
+ */
 template <typename _T> void imu_tk::integrateGyroInterval( const std::vector< TriadData_<_T> >& gyro_samples, 
                                                            Eigen::Matrix< _T, 3 , 3  >& rot_res, 
                                                            _T data_dt, const DataInterval& interval )

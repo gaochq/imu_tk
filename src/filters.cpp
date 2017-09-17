@@ -30,55 +30,66 @@
 
 using namespace Eigen;
 
+/**
+ * [imu_tk::staticIntervalsDetector  description]
+ * @param samples   [IMU测量序列]
+ * @param threshold [静态阈值]
+ * @param intervals [检测到的静态片段]
+ * @param win_size  [滑窗大小，用来计算局部的测量方差]
+ */
 template <typename _T> 
   void imu_tk::staticIntervalsDetector ( const std::vector< imu_tk::TriadData_<_T> >& samples, 
                                          _T threshold, std::vector< imu_tk::DataInterval >& intervals, 
                                          int win_size )
 {
-  if ( win_size < 11 ) win_size = 11;
-  if( !(win_size % 2) ) win_size++;
-  
-  int h = win_size / 2;
-  
-  if( win_size >=  samples.size() )
-    return;
- 
-  intervals.clear();
-  
-  bool look_for_start = true;
-  imu_tk::DataInterval current_interval;
-  
-  for( int i = h; i < samples.size() - h; i++ )
-  {
-    Matrix< _T, 3, 1> variance = dataVariance( samples, DataInterval( i - h, i + h) );
-    _T norm = variance.norm();
-    
-    if( look_for_start )
+    if ( win_size < 11 ) 
+        win_size = 11;
+    if( !(win_size % 2) ) 
+        win_size++;
+
+    int h = win_size / 2;
+
+    if( win_size >=  samples.size() )
+        return;
+
+    intervals.clear();
+
+    bool look_for_start = true;
+    imu_tk::DataInterval current_interval;
+
+    //! 滑窗形式求取方差，提取方差满足要去的测量片段，最终得到的片段大小可能大于win_size
+    for( int i = h; i < samples.size() - h; i++ )
     {
-      if (norm < threshold)
-      {
-        current_interval.start_idx = i;
-        look_for_start = false;
-      }
+        Matrix< _T, 3, 1> variance = dataVariance( samples, DataInterval( i - h, i + h) );
+        _T norm = variance.norm();
+
+        if( look_for_start )
+        {
+            if (norm < threshold)
+            {
+                current_interval.start_idx = i;
+                look_for_start = false;
+            }
+        }
+        else
+        {
+            if (norm >= threshold)
+            {
+                current_interval.end_idx = i - 1;
+                look_for_start = true;
+                intervals.push_back(current_interval);
+            }
+        }
     }
-    else
+
+    // If the last interval has not been included in the intervals vector
+    //! 针对最后一组片段，到结束还是属于静态的情况。
+    if( !look_for_start )
     {
-      if (norm >= threshold)
-      {
-        current_interval.end_idx = i - 1;
-        look_for_start = true;
+        current_interval.end_idx = samples.size() - h - 1;
+        //current_interval.end_ts = samples[current_interval.end_idx].timestamp();
         intervals.push_back(current_interval);
-      }
     }
-  }
-  
-  // If the last interval has not been included in the intervals vector
-  if( !look_for_start )
-  {
-    current_interval.end_idx = samples.size() - h - 1;
-    //current_interval.end_ts = samples[current_interval.end_idx].timestamp();
-    intervals.push_back(current_interval);
-  }
 }
 
 template void imu_tk::staticIntervalsDetector<double> ( const std::vector< TriadData_<double> > &samples,

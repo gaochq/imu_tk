@@ -39,6 +39,9 @@ using namespace imu_tk;
 using namespace Eigen;
 using namespace std;
 
+/**
+ * 加速度计的校准残差
+ */
 template <typename _T1> struct MultiPosAccResidual
 {
   MultiPosAccResidual( const _T1 &g_mag, const Eigen::Matrix< _T1, 3 , 1> &sample ) :
@@ -51,6 +54,7 @@ template <typename _T1> struct MultiPosAccResidual
     Eigen::Matrix< _T2, 3 , 1> raw_samp( _T2(sample_(0)), _T2(sample_(1)), _T2(sample_(2)) );
     /* Assume body frame same as accelerometer frame, 
      * so bottom left params in the misalignment matris are set to zero */
+    //! 对于加速度计的校准来说是将AOF坐标系经过了特殊定义的，所以部分的Misalignment是为0的
     CalibratedTriad_<_T2> calib_triad( params[0], params[1], params[2], 
                                      _T2(0), _T2(0), _T2(0),
                                      params[3], params[4], params[5], 
@@ -148,265 +152,295 @@ template <typename _T>
   optimize_gyro_bias_(false),
   verbose_output_(false){}
 
+/**
+ * 加速度计校准主程序
+ */
 template <typename _T>
   bool MultiPosCalibration_<_T>::calibrateAcc ( const std::vector< TriadData_<_T> >& acc_samples )
 {
-  cout<<"Accelerometers calibration: calibrating..."<<endl;
-  
-  min_cost_static_intervals_.clear();
-  calib_acc_samples_.clear();
-  calib_gyro_samples_.clear();
-  
-  int n_samps = acc_samples.size();
-  
-  DataInterval init_static_interval = DataInterval::initialInterval( acc_samples, init_interval_duration_ );
-  Eigen::Matrix<_T, 3, 1> acc_variance = dataVariance( acc_samples, init_static_interval );
-  _T norm_th = acc_variance.norm();
+    cout<<"Accelerometers calibration: calibrating..."<<endl;
 
-  _T min_cost = std::numeric_limits< _T >::max();
-  int min_cost_th = -1;
-  std::vector< double > min_cost_calib_params;
-  
-  for (int th_mult = 2; th_mult <= 10; th_mult++)
-  {
-    std::vector< imu_tk::DataInterval > static_intervals;
-    std::vector< imu_tk::TriadData_<_T> > static_samples;
-    std::vector< double > acc_calib_params(9);
-    
-    acc_calib_params[0] = init_acc_calib_.misYZ();
-    acc_calib_params[1] = init_acc_calib_.misZY();
-    acc_calib_params[2] = init_acc_calib_.misZX();
-    
-    acc_calib_params[3] = init_acc_calib_.scaleX();
-    acc_calib_params[4] = init_acc_calib_.scaleY();
-    acc_calib_params[5] = init_acc_calib_.scaleZ();
-    
-    acc_calib_params[6] = init_acc_calib_.biasX();
-    acc_calib_params[7] = init_acc_calib_.biasY();
-    acc_calib_params[8] = init_acc_calib_.biasZ();
-    
-    std::vector< DataInterval > extracted_intervals;
-    staticIntervalsDetector ( acc_samples, th_mult*norm_th, static_intervals );
-    extractIntervalsSamples ( acc_samples, static_intervals, 
-                              static_samples, extracted_intervals,
-                              interval_n_samples_, acc_use_means_ );
-    
-    if(verbose_output_)
-      cout<<"Accelerometers calibration: extracted "<<extracted_intervals.size()
-          <<" intervals using threshold multiplier "<<th_mult<<" -> ";
-    
-    // TODO Perform here a quality test
-    if( extracted_intervals.size() < min_num_intervals_)
-    {
-      if( verbose_output_) cout<<"Not enough intervals, calibration is not possible"<<endl;
-      continue;
-    }
-    
-    if( verbose_output_) cout<<"Trying calibrate... "<<endl;
-    
-    ceres::Problem problem;
-    for( int i = 0; i < static_samples.size(); i++)
-    {
-      ceres::CostFunction* cost_function =
-        MultiPosAccResidual<_T>::Create ( g_mag_, static_samples[i].data() );
+    min_cost_static_intervals_.clear();
+    calib_acc_samples_.clear();
+    calib_gyro_samples_.clear();
 
-      problem.AddResidualBlock ( cost_function, NULL /* squared loss */, acc_calib_params.data() ); 
-    }
-    
-    ceres::Solver::Options options;
-    options.linear_solver_type = ceres::DENSE_QR;
-    options.minimizer_progress_to_stdout = verbose_output_;
+    int n_samps = acc_samples.size();
 
-    ceres::Solver::Summary summary;
-    ceres::Solve ( options, &problem, &summary );
-    if( summary.final_cost < min_cost)
+    //! 提取初始化50s的加速度采样值的起始和终止Index，并求取这段测量时间段内的测量方差
+    DataInterval init_static_interval = DataInterval::initialInterval( acc_samples, init_interval_duration_ );
+    Eigen::Matrix<_T, 3, 1> acc_variance = dataVariance( acc_samples, init_static_interval );
+    _T norm_th = acc_variance.norm();
+
+    _T min_cost = std::numeric_limits< _T >::max();
+    int min_cost_th = -1;
+    std::vector< double > min_cost_calib_params;
+
+    //! 按照设置静态阈值的不同，分出多组静态加速度计测量序列
+    for (int th_mult = 2; th_mult <= 10; th_mult++)
     {
-      min_cost = summary.final_cost;
-      min_cost_th = th_mult;
-      min_cost_static_intervals_ = static_intervals;
-      min_cost_calib_params = acc_calib_params;
+        std::vector< imu_tk::DataInterval > static_intervals;
+        std::vector< imu_tk::TriadData_<_T> > static_samples;
+        std::vector< double > acc_calib_params(9);
+
+        acc_calib_params[0] = init_acc_calib_.misYZ();
+        acc_calib_params[1] = init_acc_calib_.misZY();
+        acc_calib_params[2] = init_acc_calib_.misZX();
+
+        acc_calib_params[3] = init_acc_calib_.scaleX();
+        acc_calib_params[4] = init_acc_calib_.scaleY();
+        acc_calib_params[5] = init_acc_calib_.scaleZ();
+
+        acc_calib_params[6] = init_acc_calib_.biasX();
+        acc_calib_params[7] = init_acc_calib_.biasY();
+        acc_calib_params[8] = init_acc_calib_.biasZ();
+
+        //! 不同段的加速度计测量值
+        std::vector< DataInterval > extracted_intervals;
+        //! 判断出sanmple中那些片段是属于静止的
+        staticIntervalsDetector ( acc_samples, th_mult*norm_th, static_intervals );
+        //! 提取静态的加速度测量片段，注意这个地方有两种不同的形式。
+        //! (1) 使用均值，最后的static_samples的大小和extracted_intervals是一样的，之后每隔片段的平均值
+        //! (2) 不使用均值，最后提取出的static_samples的大小和extracted_intervals*interval_n_samples_的大小是一致的。
+        extractIntervalsSamples (   acc_samples, static_intervals, 
+                                    static_samples, extracted_intervals,
+                                    interval_n_samples_, acc_use_means_ );
+
+        if(verbose_output_)
+            cout<<"Accelerometers calibration: extracted "<<extracted_intervals.size()
+            <<" intervals using threshold multiplier "<<th_mult<<" -> ";
+
+        // TODO Perform here a quality test
+        if( extracted_intervals.size() < min_num_intervals_)
+        {
+            if( verbose_output_) cout<<"Not enough intervals, calibration is not possible"<<endl;
+                 continue;
+        }
+
+        if( verbose_output_) 
+            cout<<"Trying calibrate... "<<endl;
+
+        //! 开始建立ceres优化的problem
+        ceres::Problem problem;
+        for( int i = 0; i < static_samples.size(); i++)
+        {
+            ceres::CostFunction* cost_function =
+            MultiPosAccResidual<_T>::Create ( g_mag_, static_samples[i].data() );
+
+            problem.AddResidualBlock ( cost_function, NULL /* squared loss */, acc_calib_params.data() ); 
+        }
+
+        ceres::Solver::Options options;
+        options.linear_solver_type = ceres::DENSE_QR;
+        options.minimizer_progress_to_stdout = verbose_output_;
+
+        ceres::Solver::Summary summary;
+        ceres::Solve ( options, &problem, &summary );
+
+        //! 最终的校准参数是残差最小的一组
+        if( summary.final_cost < min_cost)
+        {
+            min_cost = summary.final_cost;
+            min_cost_th = th_mult;
+            min_cost_static_intervals_ = static_intervals;
+            min_cost_calib_params = acc_calib_params;
+        }
+        cout<<"residual "<<summary.final_cost<<endl;
     }
-    cout<<"residual "<<summary.final_cost<<endl;
-  }
-  
-  if( min_cost_th < 0 )
-  {
+
+    if( min_cost_th < 0 )
+    {
+        if(verbose_output_) 
+            cout<<"Accelerometers calibration: Can't obtain any calibratin with the current dataset"<<endl;
+        return false;
+    }
+
+    acc_calib_ = CalibratedTriad_<_T>( min_cost_calib_params[0],
+    min_cost_calib_params[1],
+    min_cost_calib_params[2],
+    0,0,0,
+    min_cost_calib_params[3],
+    min_cost_calib_params[4],
+    min_cost_calib_params[5],
+    min_cost_calib_params[6],
+    min_cost_calib_params[7],
+    min_cost_calib_params[8] );
+
+    calib_acc_samples_.reserve(n_samps);
+
+    // Calibrate the input accelerometer data with the obtained calibration
+    //! 存入输入参数经过校准后的结果
+    for( int i = 0; i < n_samps; i++)
+        calib_acc_samples_.push_back( acc_calib_.unbiasNormalize( acc_samples[i]) );
+
+    //! 显示部分
     if(verbose_output_) 
-      cout<<"Accelerometers calibration: Can't obtain any calibratin with the current dataset"<<endl;
-    return false;
-  }
+    {
+        Plot plot;
+        plot.plotIntervals( calib_acc_samples_, min_cost_static_intervals_);
 
-  acc_calib_ = CalibratedTriad_<_T>( min_cost_calib_params[0],
-                                     min_cost_calib_params[1],
-                                     min_cost_calib_params[2],
-                                     0,0,0,
-                                     min_cost_calib_params[3],
-                                     min_cost_calib_params[4],
-                                     min_cost_calib_params[5],
-                                     min_cost_calib_params[6],
-                                     min_cost_calib_params[7],
-                                     min_cost_calib_params[8] );
-  
-  calib_acc_samples_.reserve(n_samps);
-  
-  // Calibrate the input accelerometer data with the obtained calibration
-  for( int i = 0; i < n_samps; i++)
-    calib_acc_samples_.push_back( acc_calib_.unbiasNormalize( acc_samples[i]) );
-  
-  if(verbose_output_) 
-  {
-    Plot plot;
-    plot.plotIntervals( calib_acc_samples_, min_cost_static_intervals_);
-    
-    cout<<"Accelerometers calibration: Better calibration obtained using threshold multiplier "<<min_cost_th
+        cout<<"Accelerometers calibration: Better calibration obtained using threshold multiplier "<<min_cost_th
         <<" with residual "<<min_cost<<endl
         <<acc_calib_<<endl
         <<"Accelerometers calibration: inverse scale factors:"<<endl
         <<1.0/acc_calib_.scaleX()<<endl
         <<1.0/acc_calib_.scaleY()<<endl
         <<1.0/acc_calib_.scaleZ()<<endl;
-        
-    waitForKey();
-  }
-  
-  return true;
+
+        waitForKey();
+    }
+
+    return true;
     
 }
 
+/**
+ * 加速度解和陀螺仪校准的主函数
+ */
 template <typename _T> 
   bool MultiPosCalibration_<_T>::calibrateAccGyro ( const vector< TriadData_<_T> >& acc_samples, 
                                                    const vector< TriadData_<_T> >& gyro_samples )
 {
-  if( !calibrateAcc( acc_samples ) )
-    return false;
-  
-  cout<<"Gyroscopes calibration: calibrating..."<<endl;
-  
-  std::vector< TriadData_<_T> > static_acc_means;
-  std::vector< DataInterval > extracted_intervals;
-  extractIntervalsSamples ( calib_acc_samples_, min_cost_static_intervals_, 
-                            static_acc_means, extracted_intervals,
-                            interval_n_samples_, true );
-  
-  int n_static_pos = static_acc_means.size(), n_samps = gyro_samples.size();
-  
-  // Compute the gyroscopes biases in the (static) initialization interval
-  DataInterval init_static_interval = DataInterval::initialInterval( gyro_samples, init_interval_duration_ );
-  Eigen::Matrix<_T, 3, 1> gyro_bias = dataMean( gyro_samples, init_static_interval );
-  
-  gyro_calib_ = CalibratedTriad_<_T>(0, 0, 0, 0, 0, 0, 
-                                    1.0, 1.0, 1.0, 
-                                    gyro_bias(0), gyro_bias(1), gyro_bias(2) );
-  
+    if( !calibrateAcc( acc_samples ) )
+        return false;
 
-  // calib_gyro_samples_ already cleared in calibrateAcc()
-  calib_gyro_samples_.reserve(n_samps);
-  // Remove the bias
-  for( int i = 0; i < n_samps; i++ )
-    calib_gyro_samples_.push_back(gyro_calib_.unbias(gyro_samples[i]));
-  
-  std::vector< double > gyro_calib_params(12);
+    //! 若加速度计校准成功，则进入陀螺仪的校准主程序
+    cout<<"Gyroscopes calibration: calibrating..."<<endl;
 
-  gyro_calib_params[0] = init_gyro_calib_.misYZ();
-  gyro_calib_params[1] = init_gyro_calib_.misZY();
-  gyro_calib_params[2] = init_gyro_calib_.misZX();
-  gyro_calib_params[3] = init_gyro_calib_.misXZ();
-  gyro_calib_params[4] = init_gyro_calib_.misXY();
-  gyro_calib_params[5] = init_gyro_calib_.misYX();
-  
-  gyro_calib_params[6] = init_gyro_calib_.scaleX();
-  gyro_calib_params[7] = init_gyro_calib_.scaleY();
-  gyro_calib_params[8] = init_gyro_calib_.scaleZ();
-  
-  // Bias has been estimated and removed in the initialization period
-  gyro_calib_params[9] = 0.0;
-  gyro_calib_params[10] = 0.0;
-  gyro_calib_params[11] = 0.0;
-  
-  ceres::Problem problem;
-      
-  for( int i = 0, t_idx = 0; i < n_static_pos - 1; i++ )
-  {
-    Eigen::Matrix<_T, 3, 1> g_versor_pos0 = static_acc_means[i].data(),
-                            g_versor_pos1 = static_acc_means[i + 1].data();
-                               
-    g_versor_pos0 /= g_versor_pos0.norm();                           
-    g_versor_pos1 /= g_versor_pos1.norm();
-    
-    int gyro_idx0 = -1, gyro_idx1 = -1;
-    _T ts0 = calib_acc_samples_[extracted_intervals[i].end_idx].timestamp(), 
-       ts1 = calib_acc_samples_[extracted_intervals[i + 1].start_idx].timestamp();
-     
-    // Assume monotone signal time
-    for( ; t_idx < n_samps; t_idx++ )
+    //! 在校准之后的加速度计测量值中提取静态的测量片段，采用均值的方式
+    //! 所以最后的测量值的数量和静态的片段个数是相等的。
+    std::vector< TriadData_<_T> > static_acc_means;
+    std::vector< DataInterval > extracted_intervals;
+    extractIntervalsSamples (   calib_acc_samples_, min_cost_static_intervals_, 
+                                static_acc_means, extracted_intervals,
+                                interval_n_samples_, true );
+
+    int n_static_pos = static_acc_means.size(), n_samps = gyro_samples.size();
+
+    // Compute the gyroscopes biases in the (static) initialization interval
+    //! 通过使用Allan方差分析法，利用刚开始初始化阶段的陀螺仪测量值，计算陀螺仪的Bias
+    //! 陀螺仪的Bias直接就是陀螺仪静止搁置时的测量值？
+    DataInterval init_static_interval = DataInterval::initialInterval( gyro_samples, init_interval_duration_ );
+    Eigen::Matrix<_T, 3, 1> gyro_bias = dataMean( gyro_samples, init_static_interval );
+
+    gyro_calib_ = CalibratedTriad_<_T>( 0, 0, 0, 0, 0, 0, 
+                                        1.0, 1.0, 1.0, 
+                                        gyro_bias(0), gyro_bias(1), gyro_bias(2) );
+
+
+    // calib_gyro_samples_ already cleared in calibrateAcc()
+    calib_gyro_samples_.reserve(n_samps);
+
+    // Remove the bias
+    //! 将测量值中的Bias去除 
+    for( int i = 0; i < n_samps; i++ )
+        calib_gyro_samples_.push_back(gyro_calib_.unbias(gyro_samples[i]));
+
+    std::vector< double > gyro_calib_params(12);
+
+    gyro_calib_params[0] = init_gyro_calib_.misYZ();
+    gyro_calib_params[1] = init_gyro_calib_.misZY();
+    gyro_calib_params[2] = init_gyro_calib_.misZX();
+    gyro_calib_params[3] = init_gyro_calib_.misXZ();
+    gyro_calib_params[4] = init_gyro_calib_.misXY();
+    gyro_calib_params[5] = init_gyro_calib_.misYX();
+
+    gyro_calib_params[6] = init_gyro_calib_.scaleX();
+    gyro_calib_params[7] = init_gyro_calib_.scaleY();
+    gyro_calib_params[8] = init_gyro_calib_.scaleZ();
+
+    // Bias has been estimated and removed in the initialization period
+    gyro_calib_params[9] = 0.0;
+    gyro_calib_params[10] = 0.0;
+    gyro_calib_params[11] = 0.0;
+
+    ceres::Problem problem;
+
+    for( int i = 0, t_idx = 0; i < n_static_pos - 1; i++ )
     {
-      if( gyro_idx0 < 0 )
-      {
-        if( calib_gyro_samples_[t_idx].timestamp() >= ts0 )
-          gyro_idx0 = t_idx;
-      }
-      else
-      {
-        if( calib_gyro_samples_[t_idx].timestamp() >= ts1 )
+        //! 旋转前的初始姿态
+        Eigen::Matrix<_T, 3, 1> g_versor_pos0 = static_acc_means[i].data(),
+        //! 旋转后的姿态
+        g_versor_pos1 = static_acc_means[i + 1].data();
+
+        //! 做归一化
+        g_versor_pos0 /= g_versor_pos0.norm();                           
+        g_versor_pos1 /= g_versor_pos1.norm();
+
+        //! 获取旋转开始和结束的时间戳
+        int gyro_idx0 = -1, gyro_idx1 = -1;
+        _T ts0 = calib_acc_samples_[extracted_intervals[i].end_idx].timestamp(), 
+        ts1 = calib_acc_samples_[extracted_intervals[i + 1].start_idx].timestamp();
+
+        // Assume monotone signal time
+        for( ; t_idx < n_samps; t_idx++ )
         {
-          gyro_idx1 = t_idx - 1;
-          break;
+            if( gyro_idx0 < 0 )
+            {
+                if( calib_gyro_samples_[t_idx].timestamp() >= ts0 )
+                    gyro_idx0 = t_idx;
+            }
+            else
+            {
+                if( calib_gyro_samples_[t_idx].timestamp() >= ts1 )
+                {
+                    gyro_idx1 = t_idx - 1;
+                    break;
+                }
+            }
         }
-      }
+
+        //     cout<<"from "<<calib_gyro_samples_[gyro_idx0].timestamp()<<" to "
+        //         <<calib_gyro_samples_[gyro_idx1].timestamp()
+        //         <<" v0 : "<< g_versor_pos0(0)<<" "<< g_versor_pos0(1)<<" "<< g_versor_pos0(2)
+        //         <<" v1 : "<< g_versor_pos1(0)<<" "<< g_versor_pos1(1)<<" "<< g_versor_pos1(2)<<endl;
+
+        DataInterval gyro_interval(gyro_idx0, gyro_idx1);
+
+        ceres::CostFunction* cost_function =
+        MultiPosGyroResidual<_T>::Create ( g_versor_pos0, g_versor_pos1, calib_gyro_samples_,
+        gyro_interval, gyro_dt_, optimize_gyro_bias_ );
+
+        problem.AddResidualBlock ( cost_function, NULL /* squared loss */, gyro_calib_params.data() ); 
+
     }
-    
-//     cout<<"from "<<calib_gyro_samples_[gyro_idx0].timestamp()<<" to "
-//         <<calib_gyro_samples_[gyro_idx1].timestamp()
-//         <<" v0 : "<< g_versor_pos0(0)<<" "<< g_versor_pos0(1)<<" "<< g_versor_pos0(2)
-//         <<" v1 : "<< g_versor_pos1(0)<<" "<< g_versor_pos1(1)<<" "<< g_versor_pos1(2)<<endl;
-    
-    DataInterval gyro_interval(gyro_idx0, gyro_idx1);
-    
-    ceres::CostFunction* cost_function =
-      MultiPosGyroResidual<_T>::Create ( g_versor_pos0, g_versor_pos1, calib_gyro_samples_,
-                                         gyro_interval, gyro_dt_, optimize_gyro_bias_ );
 
-    problem.AddResidualBlock ( cost_function, NULL /* squared loss */, gyro_calib_params.data() ); 
-      
-  }
-  
-  ceres::Solver::Options options;
-  options.linear_solver_type = ceres::DENSE_QR;
-  options.minimizer_progress_to_stdout = verbose_output_;
+    ceres::Solver::Options options;
+    options.linear_solver_type = ceres::DENSE_QR;
+    options.minimizer_progress_to_stdout = verbose_output_;
 
-  ceres::Solver::Summary summary;
+    ceres::Solver::Summary summary;
 
-  ceres::Solve ( options, &problem, &summary );
-  gyro_calib_ = CalibratedTriad_<_T>( gyro_calib_params[0],
-                                     gyro_calib_params[1],
-                                     gyro_calib_params[2],
-                                     gyro_calib_params[3],
-                                     gyro_calib_params[4],
-                                     gyro_calib_params[5],
-                                     gyro_calib_params[6],
-                                     gyro_calib_params[7],
-                                     gyro_calib_params[8],
-                                     gyro_bias(0) + gyro_calib_params[9],
-                                     gyro_bias(1) + gyro_calib_params[10],
-                                     gyro_bias(2) + gyro_calib_params[11]);                            
+    ceres::Solve ( options, &problem, &summary );
+    gyro_calib_ = CalibratedTriad_<_T>( gyro_calib_params[0],
+    gyro_calib_params[1],
+    gyro_calib_params[2],
+    gyro_calib_params[3],
+    gyro_calib_params[4],
+    gyro_calib_params[5],
+    gyro_calib_params[6],
+    gyro_calib_params[7],
+    gyro_calib_params[8],
+    gyro_bias(0) + gyro_calib_params[9],
+    gyro_bias(1) + gyro_calib_params[10],
+    gyro_bias(2) + gyro_calib_params[11]);                            
 
-  // Calibrate the input gyroscopes data with the obtained calibration
-  for( int i = 0; i < n_samps; i++)
-    calib_gyro_samples_.push_back( gyro_calib_.unbiasNormalize( gyro_samples[i]) );
-  
-  if(verbose_output_) 
-  {
-    
+    // Calibrate the input gyroscopes data with the obtained calibration
+    for( int i = 0; i < n_samps; i++)
+        calib_gyro_samples_.push_back( gyro_calib_.unbiasNormalize( gyro_samples[i]) );
+
+    if(verbose_output_) 
+    {
+
     cout<<summary.FullReport()<<endl;
     cout<<"Gyroscopes calibration: residual "<<summary.final_cost<<endl
-        <<gyro_calib_<<endl
-        <<"Gyroscopes calibration: inverse scale factors:"<<endl
-        <<1.0/gyro_calib_.scaleX()<<endl
-        <<1.0/gyro_calib_.scaleY()<<endl
-        <<1.0/gyro_calib_.scaleZ()<<endl;
-  }
-  
-  return true;
+    <<gyro_calib_<<endl
+    <<"Gyroscopes calibration: inverse scale factors:"<<endl
+    <<1.0/gyro_calib_.scaleX()<<endl
+    <<1.0/gyro_calib_.scaleY()<<endl
+    <<1.0/gyro_calib_.scaleZ()<<endl;
+    }
+
+    return true;
 }
 
 template class MultiPosCalibration_<double>;

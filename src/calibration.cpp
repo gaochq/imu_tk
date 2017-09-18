@@ -77,46 +77,48 @@ template <typename _T1> struct MultiPosAccResidual
 
 template <typename _T1> struct MultiPosGyroResidual
 {
-  MultiPosGyroResidual( const Eigen::Matrix< _T1, 3 , 1> &g_versor_pos0, 
-                        const Eigen::Matrix< _T1, 3 , 1> &g_versor_pos1,
-                        const std::vector< TriadData_<_T1> > &gyro_samples, 
-                        const DataInterval &gyro_interval_pos01, 
-                        _T1 dt, bool optimize_bias) :
+    MultiPosGyroResidual( const Eigen::Matrix< _T1, 3 , 1> &g_versor_pos0, 
+    const Eigen::Matrix< _T1, 3 , 1> &g_versor_pos1,
+    const std::vector< TriadData_<_T1> > &gyro_samples, 
+    const DataInterval &gyro_interval_pos01, 
+    _T1 dt, bool optimize_bias) :
 
-  g_versor_pos0_(g_versor_pos0), 
-  g_versor_pos1_(g_versor_pos1),
-  gyro_samples_(gyro_samples),
-  interval_pos01_(gyro_interval_pos01),
-  dt_(dt), optimize_bias_(optimize_bias){}
-  
-  template <typename _T2>
+    g_versor_pos0_(g_versor_pos0), 
+    g_versor_pos1_(g_versor_pos1),
+    gyro_samples_(gyro_samples),
+    interval_pos01_(gyro_interval_pos01),
+    dt_(dt), optimize_bias_(optimize_bias){}
+
+    template <typename _T2>
     bool operator() ( const _T2* const params, _T2* residuals ) const
-  {
-    CalibratedTriad_<_T2> calib_triad( params[0], params[1], params[2], 
-                                      params[3], params[4], params[5], 
-                                      params[6], params[7], params[8],
-                                      optimize_bias_?params[9]:_T2(0), 
-                                      optimize_bias_?params[10]:_T2(0), 
-                                      optimize_bias_?params[11]:_T2(0) );
+    {
+        CalibratedTriad_<_T2> calib_triad( params[0], params[1], params[2], 
+        params[3], params[4], params[5], 
+        params[6], params[7], params[8],
+        //! 选择是否还要校准Bias
+        optimize_bias_?params[9]:_T2(0), 
+        optimize_bias_?params[10]:_T2(0), 
+        optimize_bias_?params[11]:_T2(0) );
 
-    std::vector< TriadData_<_T2> > calib_gyro_samples;
-    calib_gyro_samples.reserve( interval_pos01_.end_idx - interval_pos01_.start_idx + 1 );
-    
-    for( int i = interval_pos01_.start_idx; i <= interval_pos01_.end_idx; i++ )
-      calib_gyro_samples.push_back( TriadData_<_T2>( calib_triad.unbiasNormalize( gyro_samples_[i] ) ) );
-    
-    Eigen::Matrix< _T2, 3 , 3> rot_mat;
-    integrateGyroInterval( calib_gyro_samples, rot_mat, _T2(dt_) );
-    
-    Eigen::Matrix< _T2, 3 , 1> diff = rot_mat.transpose()*g_versor_pos0_.template cast<_T2>() -
-                                      g_versor_pos1_.template cast<_T2>();
-    
-    residuals[0] = diff(0);
-    residuals[1] = diff(1);
-    residuals[2] = diff(2);
-    
-    return true;
-  }
+        std::vector< TriadData_<_T2> > calib_gyro_samples;
+        calib_gyro_samples.reserve( interval_pos01_.end_idx - interval_pos01_.start_idx + 1 );
+
+        for( int i = interval_pos01_.start_idx; i <= interval_pos01_.end_idx; i++ )
+            calib_gyro_samples.push_back( TriadData_<_T2>( calib_triad.unbiasNormalize( gyro_samples_[i] ) ) );
+
+        //! 积分得到运动片段的旋转矩阵
+        Eigen::Matrix< _T2, 3 , 3> rot_mat;
+        integrateGyroInterval( calib_gyro_samples, rot_mat, _T2(dt_) );
+
+        Eigen::Matrix< _T2, 3 , 1> diff = rot_mat.transpose()*g_versor_pos0_.template cast<_T2>() -
+        g_versor_pos1_.template cast<_T2>();
+
+        residuals[0] = diff(0);
+        residuals[1] = diff(1);
+        residuals[2] = diff(2);
+
+        return true;
+    }
   
   static ceres::CostFunction* Create ( const Eigen::Matrix< _T1, 3 , 1> &g_versor_pos0, 
                                        const Eigen::Matrix< _T1, 3 , 1> &g_versor_pos1,
@@ -370,7 +372,6 @@ template <typename _T>
         int gyro_idx0 = -1, gyro_idx1 = -1;
         _T ts0 = calib_acc_samples_[extracted_intervals[i].end_idx].timestamp(), 
         ts1 = calib_acc_samples_[extracted_intervals[i + 1].start_idx].timestamp();
-
         // Assume monotone signal time
         for( ; t_idx < n_samps; t_idx++ )
         {
@@ -396,6 +397,7 @@ template <typename _T>
 
         DataInterval gyro_interval(gyro_idx0, gyro_idx1);
 
+        //! 代价函数在构造的时候分为两种情况对应是否对Bias进行再次的校准
         ceres::CostFunction* cost_function =
         MultiPosGyroResidual<_T>::Create ( g_versor_pos0, g_versor_pos1, calib_gyro_samples_,
         gyro_interval, gyro_dt_, optimize_gyro_bias_ );
